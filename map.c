@@ -134,27 +134,29 @@ get_tile_url (MapInfo *map_info, int zoom, int x, int y)
 static void
 map_init_maps (MapPrivate *priv)
 {
-	PyObject *name, *module, *func;
+	PyObject *name, *module, *func, *value;
+	GError *err = NULL;
+	GDir *dir;
+	const gchar *fn;
+	gchar *map_id;
 
 	Py_Initialize();
 	PySys_SetPath ("maps");
 
-	GError *err = NULL;
-	GDir *dir = g_dir_open ("maps", 0, &err);
-	g_assert (err == NULL);
-
-	const gchar *f;
-	gchar *map_id;
+	dir = g_dir_open ("maps", 0, &err);
+	if (err) {
+		g_error ("Error opening maps directory");
+	}
 
 	g_debug ("Loading maps");
 
 	priv->maps = g_hash_table_new_full (g_int_hash, g_str_equal, g_free, NULL);
 
-	while ((f = g_dir_read_name (dir))) {
-		if (!g_str_has_suffix (f, ".py"))
+	while ((fn = g_dir_read_name (dir))) {
+		if (!g_str_has_suffix (fn, ".py"))
 			continue;
 
-		map_id = g_strndup (f, strlen(f) - 3);
+		map_id = g_strndup (fn, strlen(fn) - 3);
 
 		g_debug ("  %s", map_id);
 
@@ -162,59 +164,81 @@ map_init_maps (MapPrivate *priv)
 		module = PyImport_Import (name);
 		Py_DECREF (name);
 
-		if (module) {
-			func = PyObject_GetAttrString (module, "url");
-			if (func) {
-				PyObject *o = PyObject_GetAttrString (module, "title");
-				gchar *title = g_strdup (PyString_AsString (o));
+		if (!module) {
+			PyErr_Print();
+			g_warning ("Error loading map '%s'", map_id);
+			continue;
+		}
 
-				o = PyObject_GetAttrString (module, "key");
-				gchar *key = g_strdup (PyString_AsString (o));
+		func = PyObject_GetAttrString (module, "url");
+		if (!func) {
+			g_warning ("No 'url' function for map '%s'\n", map_id);
+			continue;
+		}
 
-				gint *keyval = g_new (gint, 1);
-				*keyval = gdk_keyval_from_name (key);
-				g_assert (*keyval != GDK_KEY_VoidSymbol);
+		value = PyObject_GetAttrString (module, "title");
+		if (!value) {
+			g_warning ("No title for map '%s'", map_id);
+			continue;
+		}
+		gchar *title = g_strdup (PyString_AsString (value));
 
-				o = PyObject_GetAttrString (module, "format");
-				gchar *format = g_strdup (PyString_AsString (o));
+		value = PyObject_GetAttrString (module, "key");
+		if (!value) {
+			g_warning ("No key for map '%s'", map_id);
+			continue;
+		}
+		gchar *key = g_strdup (PyString_AsString (value));
 
-				o = PyObject_GetAttrString (module, "proj");
-				g_assert (PyInt_Check (o));
-				int epsg = PyInt_AsLong (o);
+		gint *keyval = g_new (gint, 1);
+		*keyval = gdk_keyval_from_name (key);
+		if (*keyval == GDK_KEY_VoidSymbol || *keyval == 0) {
+			g_warning ("Unknown key '%s' for map '%s'", key, map_id);
+			continue;
+		}
 
-				projPJ proj;
-				if (epsg == 3857) {
-					proj = priv->spherical_mercator_proj;
-				}
-				else if (epsg == 3395) {
-					proj = priv->ellipse_mercator_proj;
-				}
-				else {
-					g_error ("Unknown projection %d in map %s\n", epsg, map_id);
-				}
+		value = PyObject_GetAttrString (module, "format");
+		if (!value) {
+			g_warning ("No format for map '%s'", map_id);
+			continue;
+		}
+		gchar *format = g_strdup (PyString_AsString (value));
 
-				MapInfo *map_info = g_new (MapInfo, 1);
-				map_info->id = map_id;
-				map_info->title = title;
-				map_info->format = format;
-				map_info->proj = proj;
-				map_info->module = module;
-				map_info->url_func = func;
+		value = PyObject_GetAttrString (module, "proj");
+		if (!value) {
+			g_warning ("No projection for map '%s'", map_id);
+			continue;
+		}
+		if (!PyInt_Check (value)) {
+			g_warning ("Bad projection for map '%s'", map_id);
+			continue;
+		}
+		int epsg = PyInt_AsLong (value);
 
-				g_hash_table_insert (priv->maps, keyval, map_info);
-
-				if (g_strcmp0 (map_id, "osmmapMapnik") == 0)
-					priv->current_map = map_info;
-			}
-			else {
-				PyErr_Print();
-				g_error ("No url func in module%s\n", map_id);
-			}
+		projPJ proj;
+		if (epsg == 3857) {
+			proj = priv->spherical_mercator_proj;
+		}
+		else if (epsg == 3395) {
+			proj = priv->ellipse_mercator_proj;
 		}
 		else {
-			PyErr_Print();
-			g_print ("Error loading module %s", map_id);
+			g_warning ("Unknown projection %d for map '%s'", epsg, map_id);
+			continue;
 		}
+
+		MapInfo *map_info = g_new (MapInfo, 1);
+		map_info->id = map_id;
+		map_info->title = title;
+		map_info->format = format;
+		map_info->proj = proj;
+		map_info->module = module;
+		map_info->url_func = func;
+
+		g_hash_table_insert (priv->maps, keyval, map_info);
+
+		if (g_strcmp0 (map_id, "osmmapMapnik") == 0)
+			priv->current_map = map_info;
 	}
 }
 

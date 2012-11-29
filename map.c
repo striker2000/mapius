@@ -105,30 +105,17 @@ map_class_init (MapClass *klass)
 static gchar *
 get_tile_url (MapInfo *map_info, int zoom, int x, int y)
 {
-		PyObject *args, *value;
-
-		args = PyTuple_New (3);
-
-		value = PyInt_FromLong (x);
-		PyTuple_SetItem (args, 0, value);
-
-		value = PyInt_FromLong (y);
-		PyTuple_SetItem (args, 1, value);
-
-		value = PyInt_FromLong (zoom);
-		PyTuple_SetItem (args, 2, value);
-
-		value = PyObject_CallObject (map_info->url_func, args);
-		if (value) {
-			gchar *result = g_strdup (PyString_AsString (value));
-			return result;
-		}
-		else {
-			PyErr_Print();
-			g_error ("get_tile_url failed");
-		}
-
+	PyObject *value = PyObject_CallFunction (map_info->url_func, "(iii)", x, y, zoom);
+	if (!value) {
+		PyErr_Print();
+		g_error ("get_tile_url failed");
 		return NULL;
+	}
+
+	gchar *result = g_strdup (PyString_AsString (value));
+	Py_DECREF (value);
+
+	return result;
 }
 
 static void
@@ -182,6 +169,7 @@ map_init_maps (MapPrivate *priv)
 			continue;
 		}
 		gchar *title = g_strdup (PyString_AsString (value));
+		Py_DECREF (value);
 
 		value = PyObject_GetAttrString (module, "key");
 		if (!value) {
@@ -189,6 +177,7 @@ map_init_maps (MapPrivate *priv)
 			continue;
 		}
 		gchar *key = g_strdup (PyString_AsString (value));
+		Py_DECREF (value);
 
 		gint *keyval = g_new (gint, 1);
 		*keyval = gdk_keyval_from_name (key);
@@ -203,6 +192,7 @@ map_init_maps (MapPrivate *priv)
 			continue;
 		}
 		gchar *format = g_strdup (PyString_AsString (value));
+		Py_DECREF (value);
 
 		value = PyObject_GetAttrString (module, "proj");
 		if (!value) {
@@ -211,9 +201,11 @@ map_init_maps (MapPrivate *priv)
 		}
 		if (!PyInt_Check (value)) {
 			g_warning ("Bad projection for map '%s'", map_id);
+			Py_DECREF (value);
 			continue;
 		}
 		int epsg = PyInt_AsLong (value);
+		Py_DECREF (value);
 
 		projPJ proj;
 		if (epsg == 3857) {

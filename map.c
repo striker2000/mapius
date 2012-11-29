@@ -272,7 +272,7 @@ map_init (Map *map)
 	MapPrivate *priv;
 
 	settings = g_key_file_new();
-	g_key_file_load_from_file (settings, "./mapius.ini", G_KEY_FILE_NONE, &err);
+	g_key_file_load_from_file (settings, "mapius.ini", G_KEY_FILE_NONE, &err);
 	if (err) {
 		g_error ("Error loading settings file: %s", err->message);
 	}
@@ -454,11 +454,15 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 		draw_x = min_x * 256 + offset_x;
 		for (tile_x = min_x; tile_x <= max_x; tile_x++) {
 			filename = g_strdup_printf (
-				"%s/%s/%d/%d/%d.%s",
+				"%s%c%s%c%d%c%d%c%d.%s",
 				priv->cache_dir,
+				G_DIR_SEPARATOR,
 				priv->current_map->id,
+				G_DIR_SEPARATOR,
 				priv->zoom,
+				G_DIR_SEPARATOR,
 				tile_x,
+				G_DIR_SEPARATOR,
 				tile_y,
 				priv->current_map->format
 			);
@@ -477,10 +481,13 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 				TileInfo *info = g_new0 (TileInfo, 1);
 				info->map = MAP (widget);
 				info->folder = g_strdup_printf (
-					"%s/%s/%d/%d",
+					"%s%c%s%c%d%c%d",
 					priv->cache_dir,
+					G_DIR_SEPARATOR,
 					priv->current_map->id,
+					G_DIR_SEPARATOR,
 					priv->zoom,
+					G_DIR_SEPARATOR,
 					tile_x
 				);
 				info->filename = filename;
@@ -493,11 +500,15 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 				guint scale;
 				for (scale = 2, scaled_zoom = priv->zoom - 1; scale <= 256 && scaled_zoom > 0; scale *= 2, scaled_zoom--) {
 					filename = g_strdup_printf (
-						"%s/%s/%d/%d/%d.%s",
+						"%s%c%s%c%d%c%d%c%d.%s",
 						priv->cache_dir,
+						G_DIR_SEPARATOR,
 						priv->current_map->id,
+						G_DIR_SEPARATOR,
 						scaled_zoom,
+						G_DIR_SEPARATOR,
 						tile_x / scale,
+						G_DIR_SEPARATOR,
 						tile_y / scale,
 						priv->current_map->format
 					);

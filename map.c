@@ -126,6 +126,7 @@ map_init_maps (MapPrivate *priv)
 	GDir *dir;
 	const gchar *fn;
 	gchar *map_id;
+	MapInfo *current_map = NULL;
 
 	Py_Initialize();
 	PySys_SetPath ("maps");
@@ -229,9 +230,16 @@ map_init_maps (MapPrivate *priv)
 
 		g_hash_table_insert (priv->maps, keyval, map_info);
 
-		if (g_strcmp0 (map_id, "osmmapMapnik") == 0)
-			priv->current_map = map_info;
+		if (!current_map || g_strcmp0 (map_id, "osmmapMapnik") == 0) {
+			current_map = map_info;
+		}
 	}
+
+	if (g_hash_table_size (priv->maps) == 0) {
+		g_error ("Maps not found");
+	}
+
+	priv->current_map = current_map;
 }
 
 static void

@@ -33,6 +33,8 @@ struct _MapPrivate
 	projPJ current_proj;
 	GHashTable *maps;
 	MapInfo *current_map;
+	gchar *cache_dir;
+	gchar *maps_dir;
 };
 
 typedef struct
@@ -55,6 +57,7 @@ G_DEFINE_TYPE (Map, map, GTK_TYPE_DRAWING_AREA);
 static gchar *get_tile_url (MapInfo *map_info, int zoom, int x, int y);
 static void map_init_maps (MapPrivate *priv);
 static void map_tile_free (Tile *tile);
+static void map_make_abs_path (gchar **path);
 static void map_init (Map *map);
 static void map_local_tile_loaded (GObject *stream, GAsyncResult *res, gpointer data);
 static void map_local_tile_opened (GObject *file, GAsyncResult *res, gpointer data);
@@ -129,11 +132,11 @@ map_init_maps (MapPrivate *priv)
 	MapInfo *current_map = NULL;
 
 	Py_Initialize();
-	PySys_SetPath ("maps");
+	PySys_SetPath (priv->maps_dir);
 
-	dir = g_dir_open ("maps", 0, &err);
+	dir = g_dir_open (priv->maps_dir, 0, &err);
 	if (err) {
-		g_error ("Error opening maps directory");
+		g_error ("Error opening maps directory: %s", err->message);
 	}
 
 	g_debug ("Loading maps");
@@ -250,9 +253,55 @@ map_tile_free (Tile *tile)
 }
 
 static void
+map_make_abs_path (gchar **path)
+{
+	if (!g_path_is_absolute (*path)) {
+		gchar *cur_dir = g_get_current_dir();
+		gchar *abs_path = g_build_filename (cur_dir, *path, NULL);
+		g_free (cur_dir);
+		g_free (*path);
+		*path = abs_path;
+	}
+}
+
+static void
 map_init (Map *map)
 {
+	GKeyFile *settings;
+	GError *err = NULL;
 	MapPrivate *priv;
+
+	settings = g_key_file_new();
+	g_key_file_load_from_file (settings, "./mapius.ini", G_KEY_FILE_NONE, &err);
+	if (err) {
+		g_error ("Error loading settings file: %s", err->message);
+	}
+
+	int max_conns_per_host = g_key_file_get_integer (settings, "Network", "MaxConnsPerHost", &err);
+	if (err) {
+		g_error ("Error loading settings: %s", err->message);
+	}
+
+	gchar *user_agent = g_key_file_get_string (settings, "Network", "UserAgent", &err);
+	if (err) {
+		g_error ("Error loading settings: %s", err->message);
+	}
+
+	gchar *cache_dir = g_key_file_get_string (settings, "Paths", "Cache", &err);
+	if (err) {
+		g_error ("Error loading settings: %s", err->message);
+	}
+	map_make_abs_path (&cache_dir);
+	g_debug ("Cache directory: %s", cache_dir);
+
+	gchar *maps_dir = g_key_file_get_string (settings, "Paths", "Maps", &err);
+	if (err) {
+		g_error ("Error loading settings: %s", err->message);
+	}
+	map_make_abs_path (&maps_dir);
+	g_debug ("Maps directory: %s", maps_dir);
+
+	g_key_file_free (settings);
 
 	priv = G_TYPE_INSTANCE_GET_PRIVATE (map, MAP_TYPE, MapPrivate);
 	priv->center_x = 128;
@@ -261,15 +310,19 @@ map_init (Map *map)
 	priv->tiles = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) map_tile_free);
 	priv->loading = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 	priv->soup_session = soup_session_async_new_with_options (
-		SOUP_SESSION_MAX_CONNS_PER_HOST, 5,
-		SOUP_SESSION_USER_AGENT, "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/536.11 (KHTML, like Gecko) Ubuntu/12.04 Chromium/20.0.1132.47 Chrome/20.0.1132.47 Safari/536.11",
+		SOUP_SESSION_MAX_CONNS_PER_HOST, max_conns_per_host,
+		SOUP_SESSION_USER_AGENT, user_agent,
 		NULL);
 	priv->current_ts = 0;
 	priv->spherical_mercator_proj = pj_init_plus ("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378137 +b=6378137 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
 	priv->ellipse_mercator_proj = pj_init_plus ("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs");
 	priv->latlong_proj = pj_init_plus ("+proj=latlong +ellps=WGS84");
+	priv->cache_dir = cache_dir;
+	priv->maps_dir = maps_dir;
 
-	map_init_maps(priv);
+	g_free (user_agent);
+
+	map_init_maps (priv);
 
 	map->priv = priv;
 
@@ -401,7 +454,8 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 		draw_x = min_x * 256 + offset_x;
 		for (tile_x = min_x; tile_x <= max_x; tile_x++) {
 			filename = g_strdup_printf (
-				"cache/%s/%d/%d/%d.%s",
+				"%s/%s/%d/%d/%d.%s",
+				priv->cache_dir,
 				priv->current_map->id,
 				priv->zoom,
 				tile_x,
@@ -423,7 +477,8 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 				TileInfo *info = g_new0 (TileInfo, 1);
 				info->map = MAP (widget);
 				info->folder = g_strdup_printf (
-					"cache/%s/%d/%d",
+					"%s/%s/%d/%d",
+					priv->cache_dir,
 					priv->current_map->id,
 					priv->zoom,
 					tile_x
@@ -438,7 +493,8 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 				guint scale;
 				for (scale = 2, scaled_zoom = priv->zoom - 1; scale <= 256 && scaled_zoom > 0; scale *= 2, scaled_zoom--) {
 					filename = g_strdup_printf (
-						"cache/%s/%d/%d/%d.%s",
+						"%s/%s/%d/%d/%d.%s",
+						priv->cache_dir,
 						priv->current_map->id,
 						scaled_zoom,
 						tile_x / scale,

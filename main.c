@@ -1,9 +1,9 @@
 #include <gtk/gtk.h>
 
-#include "map.h"
+#include "mapius-map.h"
 
 static void
-map_loading (Map *map, guint cnt, GtkWidget *label)
+map_loading (MapiusMap *map, guint cnt, GtkWidget *label)
 {
 	gchar *str = g_strdup_printf ("Loading: %d", cnt);
 	gtk_label_set_text (GTK_LABEL (label), str);
@@ -11,7 +11,7 @@ map_loading (Map *map, guint cnt, GtkWidget *label)
 }
 
 static void
-map_zoom_changed (Map *map, guint zoom, GtkWidget *label)
+map_zoom_changed (MapiusMap *map, guint zoom, GtkWidget *label)
 {
 	gchar *str = g_strdup_printf ("Zoom: %d", zoom);
 	gtk_label_set_text (GTK_LABEL (label), str);
@@ -19,7 +19,7 @@ map_zoom_changed (Map *map, guint zoom, GtkWidget *label)
 }
 
 static void
-map_map_changed (Map *map, gchar *title, GtkWidget *label)
+map_map_changed (MapiusMap *map, gchar *title, GtkWidget *label)
 {
 	gchar *str = g_strdup_printf ("Map: %s", title);
 	gtk_label_set_text (GTK_LABEL (label), str);
@@ -45,7 +45,7 @@ int main (int argc, char **argv, char **env)
 	container = gtk_grid_new();
 	gtk_container_add (GTK_CONTAINER (window), container);
 
-	map = map_new();
+	map = mapius_map_new();
 	gtk_widget_set_hexpand (map, TRUE);
 	gtk_widget_set_vexpand (map, TRUE);
 	gtk_grid_attach (GTK_GRID(container), map, 0, 0, 3, 1);

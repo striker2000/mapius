@@ -3,7 +3,12 @@
 #include <libsoup/soup.h>
 #include <proj_api.h>
 
-#include "map.h"
+#include "mapius-map.h"
+
+#define SPHERICAL_MERCATOR_PROJ "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378137 +b=6378137 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+#define ELLIPSE_MERCATOR_PROJ "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+#define LATLONG_PROJ "+proj=latlong +ellps=WGS84"
+#define EQUATOR_HALFLENGTH 20037508.34
 
 typedef struct
 {
@@ -15,7 +20,7 @@ typedef struct
 	PyObject *url_func;
 } MapInfo;
 
-struct _MapPrivate
+struct _MapiusMapPrivate
 {
 	guint center_x;
 	guint center_y;
@@ -45,84 +50,57 @@ typedef struct
 
 typedef struct
 {
-	Map *map;
+	MapiusMap *map;
 	gchar *folder;
 	gchar *filename;
 	guint tile_x;
 	guint tile_y;
 } TileInfo;
 
-G_DEFINE_TYPE (Map, map, GTK_TYPE_DRAWING_AREA);
+G_DEFINE_TYPE (MapiusMap, mapius_map, GTK_TYPE_DRAWING_AREA);
 
-static gchar *get_tile_url (MapInfo *map_info, int zoom, int x, int y);
-static void map_init_maps (MapPrivate *priv);
-static void map_tile_free (Tile *tile);
-static void map_make_abs_path (gchar **path);
-static void map_init (Map *map);
-static void map_local_tile_loaded (GObject *stream, GAsyncResult *res, gpointer data);
-static void map_local_tile_opened (GObject *file, GAsyncResult *res, gpointer data);
-static void map_tile_loaded (SoupSession *session, SoupMessage *msg, gpointer data);
-static gboolean map_tile_purge_check (gchar *key, Tile *tile, gpointer data);
-static gboolean map_draw (GtkWidget *widget, cairo_t *cr);
-static void map_change_zoom (GtkWidget *widget, int dx, int dy, gboolean up);
-static gboolean map_change_map (GtkWidget *widget, int keyval);
-static gboolean map_key_press (GtkWidget *widget, GdkEventKey *event);
-static gboolean map_button_press (GtkWidget *widget, GdkEventButton *event);
-static gboolean map_button_release (GtkWidget *widget, GdkEventButton *event);
-static gboolean map_motion_notify (GtkWidget *widget, GdkEventMotion *event);
-static gboolean map_scroll (GtkWidget *widget, GdkEventScroll *event);
+static gboolean mapius_map_draw (GtkWidget *widget, cairo_t *cr);
+static gboolean mapius_map_key_press (GtkWidget *widget, GdkEventKey *event);
+static gboolean mapius_map_button_press (GtkWidget *widget, GdkEventButton *event);
+static gboolean mapius_map_button_release (GtkWidget *widget, GdkEventButton *event);
+static gboolean mapius_map_motion_notify (GtkWidget *widget, GdkEventMotion *event);
+static gboolean mapius_map_scroll (GtkWidget *widget, GdkEventScroll *event);
 
 GtkWidget *
-map_new()
+mapius_map_new()
 {
-	return g_object_new (MAP_TYPE, NULL);
+	return g_object_new (MAPIUS_TYPE_MAP, NULL);
 }
 
 static void
-map_class_init (MapClass *klass)
+mapius_map_class_init (MapiusMapClass *klass)
 {
 	GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
 
-	g_type_class_add_private (klass, sizeof (MapPrivate));
+	g_type_class_add_private (klass, sizeof (MapiusMapPrivate));
 
-	widget_class->draw = map_draw;
-	widget_class->key_press_event = map_key_press;
-	widget_class->button_press_event = map_button_press;
-	widget_class->button_release_event = map_button_release;
-	widget_class->motion_notify_event = map_motion_notify;
-	widget_class->scroll_event = map_scroll;
+	widget_class->draw = mapius_map_draw;
+	widget_class->key_press_event = mapius_map_key_press;
+	widget_class->button_press_event = mapius_map_button_press;
+	widget_class->button_release_event = mapius_map_button_release;
+	widget_class->motion_notify_event = mapius_map_motion_notify;
+	widget_class->scroll_event = mapius_map_scroll;
 
-	g_signal_new ("loading", MAP_TYPE,
+	g_signal_new ("loading", MAPIUS_TYPE_MAP,
 		G_SIGNAL_RUN_FIRST, 0, NULL, NULL,
 		g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 1, G_TYPE_UINT);
 
-	g_signal_new ("zoom-changed", MAP_TYPE,
+	g_signal_new ("zoom-changed", MAPIUS_TYPE_MAP,
 		G_SIGNAL_RUN_FIRST, 0, NULL, NULL,
 		g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 1, G_TYPE_UINT);
 
-	g_signal_new ("map-changed", MAP_TYPE,
+	g_signal_new ("map-changed", MAPIUS_TYPE_MAP,
 		G_SIGNAL_RUN_FIRST, 0, NULL, NULL,
 		g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 1, G_TYPE_STRING);
 }
 
-static gchar *
-get_tile_url (MapInfo *map_info, int zoom, int x, int y)
-{
-	PyObject *value = PyObject_CallFunction (map_info->url_func, "(iii)", x, y, zoom);
-	if (!value) {
-		PyErr_Print();
-		g_error ("get_tile_url failed");
-		return NULL;
-	}
-
-	gchar *result = g_strdup (PyString_AsString (value));
-	Py_DECREF (value);
-
-	return result;
-}
-
 static void
-map_init_maps (MapPrivate *priv)
+init_maps (MapiusMapPrivate *priv)
 {
 	PyObject *name, *module, *func, *value;
 	GError *err = NULL;
@@ -246,14 +224,14 @@ map_init_maps (MapPrivate *priv)
 }
 
 static void
-map_tile_free (Tile *tile)
+tile_free (Tile *tile)
 {
 	g_object_unref (tile->pixbuf);
 	g_free (tile);
 }
 
 static void
-map_make_abs_path (gchar **path)
+make_abs_path (gchar **path)
 {
 	if (!g_path_is_absolute (*path)) {
 		gchar *cur_dir = g_get_current_dir();
@@ -265,11 +243,10 @@ map_make_abs_path (gchar **path)
 }
 
 static void
-map_init (Map *map)
+mapius_map_init (MapiusMap *map)
 {
 	GKeyFile *settings;
 	GError *err = NULL;
-	MapPrivate *priv;
 
 	settings = g_key_file_new();
 	g_key_file_load_from_file (settings, "mapius.ini", G_KEY_FILE_NONE, &err);
@@ -291,40 +268,37 @@ map_init (Map *map)
 	if (err) {
 		g_error ("Error loading settings: %s", err->message);
 	}
-	map_make_abs_path (&cache_dir);
+	make_abs_path (&cache_dir);
 	g_debug ("Cache directory: %s", cache_dir);
 
 	gchar *maps_dir = g_key_file_get_string (settings, "Paths", "Maps", &err);
 	if (err) {
 		g_error ("Error loading settings: %s", err->message);
 	}
-	map_make_abs_path (&maps_dir);
+	make_abs_path (&maps_dir);
 	g_debug ("Maps directory: %s", maps_dir);
 
 	g_key_file_free (settings);
 
-	priv = G_TYPE_INSTANCE_GET_PRIVATE (map, MAP_TYPE, MapPrivate);
-	priv->center_x = 128;
-	priv->center_y = 128;
-	priv->zoom = 0;
-	priv->tiles = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) map_tile_free);
-	priv->loading = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-	priv->soup_session = soup_session_async_new_with_options (
+	map->priv = G_TYPE_INSTANCE_GET_PRIVATE (map, MAPIUS_TYPE_MAP, MapiusMapPrivate);
+
+	map->priv->center_x = 128;
+	map->priv->center_y = 128;
+	map->priv->zoom = 0;
+	map->priv->tiles = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) tile_free);
+	map->priv->loading = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	map->priv->soup_session = soup_session_async_new_with_options (
 		SOUP_SESSION_MAX_CONNS_PER_HOST, max_conns_per_host,
 		SOUP_SESSION_USER_AGENT, user_agent,
 		NULL);
-	priv->current_ts = 0;
-	priv->spherical_mercator_proj = pj_init_plus ("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378137 +b=6378137 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
-	priv->ellipse_mercator_proj = pj_init_plus ("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs");
-	priv->latlong_proj = pj_init_plus ("+proj=latlong +ellps=WGS84");
-	priv->cache_dir = cache_dir;
-	priv->maps_dir = maps_dir;
+	map->priv->current_ts = 0;
+	map->priv->spherical_mercator_proj = pj_init_plus (SPHERICAL_MERCATOR_PROJ);
+	map->priv->ellipse_mercator_proj = pj_init_plus (ELLIPSE_MERCATOR_PROJ);
+	map->priv->latlong_proj = pj_init_plus (LATLONG_PROJ);
+	map->priv->cache_dir = cache_dir;
+	map->priv->maps_dir = maps_dir;
 
-	g_free (user_agent);
-
-	map_init_maps (priv);
-
-	map->priv = priv;
+	init_maps (map->priv);
 
 	gtk_widget_add_events (
 		GTK_WIDGET (map),
@@ -336,10 +310,12 @@ map_init (Map *map)
 		| GDK_KEY_PRESS_MASK
 	);
 	gtk_widget_set_can_focus (GTK_WIDGET (map), TRUE);
+
+	g_free (user_agent);
 }
 
 static void
-map_local_tile_loaded (GObject *stream, GAsyncResult *res, gpointer data)
+local_tile_loaded (GObject *stream, GAsyncResult *res, gpointer data)
 {
 	TileInfo *info = (TileInfo *) data;
 
@@ -360,33 +336,7 @@ map_local_tile_loaded (GObject *stream, GAsyncResult *res, gpointer data)
 }
 
 static void
-map_local_tile_opened (GObject *file, GAsyncResult *res, gpointer data)
-{
-	TileInfo *info = (TileInfo *) data;
-
-	GFileInputStream *stream = g_file_read_finish (G_FILE(file), res, NULL);
-	if (stream) {
-		gdk_pixbuf_new_from_stream_async (G_INPUT_STREAM (stream), NULL, map_local_tile_loaded, info);
-	}
-	else if (!g_hash_table_lookup (info->map->priv->loading, info->filename)) {
-		gchar *url = get_tile_url (info->map->priv->current_map, info->map->priv->zoom, info->tile_x, info->tile_y);
-
-		SoupMessage *msg = soup_message_new ("GET", url);
-		g_assert (msg != NULL);
-		soup_session_queue_message (info->map->priv->soup_session, msg, map_tile_loaded, info);
-
-		g_hash_table_insert (info->map->priv->loading, g_strdup (info->filename), msg);
-
-		g_signal_emit_by_name (info->map, "loading", g_hash_table_size (info->map->priv->loading));
-
-		g_free (url);
-	}
-
-	g_object_unref (file);
-}
-
-static void
-map_tile_loaded (SoupSession *session, SoupMessage *msg, gpointer data)
+tile_loaded (SoupSession *session, SoupMessage *msg, gpointer data)
 {
 	TileInfo *info = (TileInfo *) data;
 	FILE *file;
@@ -414,16 +364,58 @@ map_tile_loaded (SoupSession *session, SoupMessage *msg, gpointer data)
 	g_free (info);
 }
 
-static gboolean
-map_tile_purge_check (gchar *key, Tile *tile, gpointer data)
+static gchar *
+get_tile_url (MapInfo *map_info, int zoom, int x, int y)
 {
-	return ((MapPrivate *) data)->current_ts - tile->ts > 2;
+	PyObject *value = PyObject_CallFunction (map_info->url_func, "(iii)", x, y, zoom);
+	if (!value) {
+		PyErr_Print();
+		g_error ("get_tile_url failed");
+		return NULL;
+	}
+
+	gchar *result = g_strdup (PyString_AsString (value));
+	Py_DECREF (value);
+
+	return result;
+}
+
+static void
+local_tile_opened (GObject *file, GAsyncResult *res, gpointer data)
+{
+	TileInfo *info = (TileInfo *) data;
+
+	GFileInputStream *stream = g_file_read_finish (G_FILE(file), res, NULL);
+	if (stream) {
+		gdk_pixbuf_new_from_stream_async (G_INPUT_STREAM (stream), NULL, local_tile_loaded, info);
+	}
+	else if (!g_hash_table_lookup (info->map->priv->loading, info->filename)) {
+		gchar *url = get_tile_url (info->map->priv->current_map, info->map->priv->zoom, info->tile_x, info->tile_y);
+
+		SoupMessage *msg = soup_message_new ("GET", url);
+		g_assert (msg != NULL);
+		soup_session_queue_message (info->map->priv->soup_session, msg, tile_loaded, info);
+
+		g_hash_table_insert (info->map->priv->loading, g_strdup (info->filename), msg);
+
+		g_signal_emit_by_name (info->map, "loading", g_hash_table_size (info->map->priv->loading));
+
+		g_free (url);
+	}
+
+	g_object_unref (file);
 }
 
 static gboolean
-map_draw (GtkWidget *widget, cairo_t *cr)
+tile_purge_check (gchar *key, Tile *tile, gpointer data)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	return ((MapiusMapPrivate *) data)->current_ts - tile->ts > 2;
+}
+
+static gboolean
+mapius_map_draw (GtkWidget *widget, cairo_t *cr)
+{
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 	guint center_x, center_y;
 	gint offset_x, offset_y;
 	guint min_x, max_x, min_y, max_y;
@@ -479,7 +471,7 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 				GFile *file = g_file_new_for_path (filename);
 
 				TileInfo *info = g_new0 (TileInfo, 1);
-				info->map = MAP (widget);
+				info->map = MAPIUS_MAP (widget);
 				info->folder = g_strdup_printf (
 					"%s%c%s%c%d%c%d",
 					priv->cache_dir,
@@ -494,7 +486,7 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 				info->tile_x = tile_x;
 				info->tile_y = tile_y;
 
-				g_file_read_async (file, G_PRIORITY_DEFAULT, NULL, map_local_tile_opened, info);
+				g_file_read_async (file, G_PRIORITY_DEFAULT, NULL, local_tile_opened, info);
 
 				guint scaled_zoom;
 				guint scale;
@@ -547,7 +539,7 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 
 	if (g_hash_table_size (priv->tiles) > 500) {
 		g_debug ("Purging tiles");
-		guint res = g_hash_table_foreach_remove (priv->tiles, (GHRFunc) map_tile_purge_check, priv);
+		guint res = g_hash_table_foreach_remove (priv->tiles, (GHRFunc) tile_purge_check, priv);
 		g_debug ("Removed %d tiles, left %d", res, g_hash_table_size (priv->tiles));
 	}
 
@@ -555,9 +547,9 @@ map_draw (GtkWidget *widget, cairo_t *cr)
 }
 
 static void
-map_change_zoom (GtkWidget *widget, int dx, int dy, gboolean up)
+mapius_map_change_zoom (GtkWidget *widget, int dx, int dy, gboolean up)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
 	if (up) {
 		if (priv->zoom >= 24)
@@ -595,23 +587,23 @@ map_change_zoom (GtkWidget *widget, int dx, int dy, gboolean up)
 }
 
 static gboolean
-map_change_map (GtkWidget *widget, int keyval)
+mapius_map_change_map (GtkWidget *widget, int keyval)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
 	MapInfo *map_info = g_hash_table_lookup (priv->maps, &keyval);
 	if (map_info) {
 		if (map_info->proj != priv->current_map->proj) {
 			guint size = pow (2, priv->zoom + 7);
 
-			double x = (priv->center_x - size) * 20037508.34 / size;
-			double y = (size - priv->center_y) * 20037508.34 / size;
+			double x = (priv->center_x - size) * EQUATOR_HALFLENGTH / size;
+			double y = (size - priv->center_y) * EQUATOR_HALFLENGTH / size;
 
 			pj_transform (priv->current_map->proj, priv->latlong_proj, 1, 1, &x, &y, NULL);
 			pj_transform (priv->latlong_proj, map_info->proj, 1, 1, &x, &y, NULL);
 
-			priv->center_x = x * size / 20037508.34 + size;
-			priv->center_y = size - y * size / 20037508.34;
+			priv->center_x = x * size / EQUATOR_HALFLENGTH + size;
+			priv->center_y = size - y * size / EQUATOR_HALFLENGTH;
 		}
 
 		priv->current_map = map_info;
@@ -628,9 +620,9 @@ map_change_map (GtkWidget *widget, int keyval)
 }
 
 static gboolean
-map_key_press (GtkWidget *widget, GdkEventKey *event)
+mapius_map_key_press (GtkWidget *widget, GdkEventKey *event)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
 	if (event->keyval == GDK_KEY_Left) {
 		priv->center_x -= 64;
@@ -645,12 +637,12 @@ map_key_press (GtkWidget *widget, GdkEventKey *event)
 		priv->center_y += 64;
 	}
 	else if (event->keyval == GDK_KEY_Page_Up) {
-		map_change_zoom (widget, 0, 0, TRUE);
+		mapius_map_change_zoom (widget, 0, 0, TRUE);
 	}
 	else if (event->keyval == GDK_KEY_Page_Down) {
-		map_change_zoom (widget, 0, 0, FALSE);
+		mapius_map_change_zoom (widget, 0, 0, FALSE);
 	}
-	else if (!map_change_map (widget, event->keyval)) {
+	else if (!mapius_map_change_map (widget, event->keyval)) {
 		return FALSE;
 	}
 
@@ -660,9 +652,9 @@ map_key_press (GtkWidget *widget, GdkEventKey *event)
 }
 
 static gboolean
-map_button_press (GtkWidget *widget, GdkEventButton *event)
+mapius_map_button_press (GtkWidget *widget, GdkEventButton *event)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
 	priv->click_x = priv->center_x + event->x;
 	priv->click_y = priv->center_y + event->y;
@@ -673,9 +665,9 @@ map_button_press (GtkWidget *widget, GdkEventButton *event)
 }
 
 static gboolean
-map_button_release (GtkWidget *widget, GdkEventButton *event)
+mapius_map_button_release (GtkWidget *widget, GdkEventButton *event)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
 	priv->button_press = FALSE;
 
@@ -685,9 +677,9 @@ map_button_release (GtkWidget *widget, GdkEventButton *event)
 }
 
 static gboolean
-map_motion_notify (GtkWidget *widget, GdkEventMotion *event)
+mapius_map_motion_notify (GtkWidget *widget, GdkEventMotion *event)
 {
-	MapPrivate *priv = MAP (widget)->priv;
+	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 	gint x, y;
 
 	if (!priv->button_press)
@@ -703,7 +695,7 @@ map_motion_notify (GtkWidget *widget, GdkEventMotion *event)
 }
 
 static gboolean
-map_scroll (GtkWidget *widget, GdkEventScroll *event)
+mapius_map_scroll (GtkWidget *widget, GdkEventScroll *event)
 {
 	guint width, height;
 	gint dx, dy;
@@ -715,11 +707,11 @@ map_scroll (GtkWidget *widget, GdkEventScroll *event)
 	dy = event->y - height / 2;
 
 	if (event->direction == GDK_SCROLL_UP) {
-		map_change_zoom (widget, dx, dy, TRUE);
+		mapius_map_change_zoom (widget, dx, dy, TRUE);
 		gtk_widget_queue_draw (widget);
 	}
 	else if (event->direction == GDK_SCROLL_DOWN) {
-		map_change_zoom (widget, dx, dy, FALSE);
+		mapius_map_change_zoom (widget, dx, dy, FALSE);
 		gtk_widget_queue_draw (widget);
 	}
 

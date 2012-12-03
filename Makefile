@@ -5,7 +5,7 @@ LIBS += -lproj
 
 all: mapius
 
-mapius: map.o main.o
+mapius: mapius-map.o main.o
 	$(CC) -o $@ $^ $(LIBS)
 
 clean:

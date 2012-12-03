@@ -5,9 +5,8 @@
 
 #include "mapius-map.h"
 
-#define SPHERICAL_MERCATOR_PROJ "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378137 +b=6378137 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+#define SPHERICAL_MERCATOR_PROJ "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378137 +b=6378137 +units=m +no_defs"
 #define ELLIPSE_MERCATOR_PROJ "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
-#define LATLONG_PROJ "+proj=latlong +ellps=WGS84"
 #define EQUATOR_HALFLENGTH 20037508.34
 
 typedef struct
@@ -34,7 +33,6 @@ struct _MapiusMapPrivate
 	guint current_ts;
 	projPJ spherical_mercator_proj;
 	projPJ ellipse_mercator_proj;
-	projPJ latlong_proj;
 	projPJ current_proj;
 	GHashTable *maps;
 	MapInfo *current_map;
@@ -294,7 +292,6 @@ mapius_map_init (MapiusMap *map)
 	map->priv->current_ts = 0;
 	map->priv->spherical_mercator_proj = pj_init_plus (SPHERICAL_MERCATOR_PROJ);
 	map->priv->ellipse_mercator_proj = pj_init_plus (ELLIPSE_MERCATOR_PROJ);
-	map->priv->latlong_proj = pj_init_plus (LATLONG_PROJ);
 	map->priv->cache_dir = cache_dir;
 	map->priv->maps_dir = maps_dir;
 
@@ -642,11 +639,10 @@ mapius_map_change_map (GtkWidget *widget, int keyval)
 			double x = (priv->center_x - size) * EQUATOR_HALFLENGTH / size;
 			double y = (size - priv->center_y) * EQUATOR_HALFLENGTH / size;
 
-			pj_transform (priv->current_map->proj, priv->latlong_proj, 1, 1, &x, &y, NULL);
-			pj_transform (priv->latlong_proj, map_info->proj, 1, 1, &x, &y, NULL);
+			pj_transform (priv->current_map->proj, map_info->proj, 1, 1, &x, &y, NULL);
 
-			priv->center_x = x * size / EQUATOR_HALFLENGTH + size;
-			priv->center_y = size - y * size / EQUATOR_HALFLENGTH;
+			priv->center_x = round (x * size / EQUATOR_HALFLENGTH + size);
+			priv->center_y = round (size - y * size / EQUATOR_HALFLENGTH);
 		}
 
 		priv->current_map = map_info;

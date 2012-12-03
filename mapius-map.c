@@ -412,6 +412,47 @@ tile_purge_check (gchar *key, Tile *tile, gpointer data)
 	return ((MapiusMapPrivate *) data)->current_ts - tile->ts > 2;
 }
 
+static void
+mapius_map_draw_scale (MapiusMap *map, cairo_t *cr)
+{
+	MapiusMapPrivate *priv = map->priv;
+
+	gint size = pow (2, priv->zoom + 7);
+	double k = cosh (M_PI * (size - priv->center_y) / size);
+	double scale = EQUATOR_HALFLENGTH / size / k;
+	double distance = pow (10, floor( log10 (scale * 100)));
+	double width = distance / scale;
+	if (width <= 20) {
+		distance *= 5;
+		width *= 5;
+	}
+	else if (width <= 50) {
+		distance *= 2;
+		width *= 2;
+	}
+	width = floor (width);
+
+	gchar *label;
+	if (distance >= 1000) {
+		label = g_strdup_printf ("%.0f km", distance / 1000);
+	}
+	else {
+		label = g_strdup_printf ("%.0f m", distance);
+	}
+
+	cairo_set_line_width (cr, 1);
+	cairo_set_source_rgb (cr, 0, 0, 0);
+	cairo_move_to (cr, 10.5, gtk_widget_get_allocated_height (GTK_WIDGET (map)) - 10.5);
+	cairo_rel_line_to (cr, 0, 5);
+	cairo_rel_line_to (cr, width, 0);
+	cairo_rel_line_to (cr, 0, -5);
+	cairo_rel_move_to (cr, 5, 5);
+	cairo_show_text (cr, label);
+	cairo_stroke (cr);
+
+	g_free (label);
+}
+
 static gboolean
 mapius_map_draw (GtkWidget *widget, cairo_t *cr)
 {
@@ -528,6 +569,8 @@ mapius_map_draw (GtkWidget *widget, cairo_t *cr)
 		}
 		draw_y += 256;
 	}
+
+	mapius_map_draw_scale (MAPIUS_MAP (widget), cr);
 
 	cairo_set_line_width (cr, 1);
 	cairo_set_source_rgb (cr, 0, 0, 0);

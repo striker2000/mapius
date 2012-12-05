@@ -9,10 +9,12 @@
 typedef struct _MapiusMap MapiusMap;
 typedef struct _MapiusMapClass MapiusMapClass;
 typedef struct _MapiusMapPrivate MapiusMapPrivate;
+typedef struct _MapiusMapInfo MapiusMapInfo;
 
 struct _MapiusMap
 {
 	GtkDrawingArea parent_instance;
+	GList *maps;
 	MapiusMapPrivate *priv;
 };
 
@@ -21,7 +23,16 @@ struct _MapiusMapClass
 	GtkDrawingAreaClass parent_class;
 };
 
+struct _MapiusMapInfo
+{
+	gchar *id;
+	gchar *title;
+	guint accel_key;
+	GdkModifierType accel_mods;
+};
+
 GType mapius_map_get_type (void);
 GtkWidget *mapius_map_new();
+void mapius_map_change_map (MapiusMap *map, gchar *id);
 
 #endif

@@ -70,6 +70,38 @@ mapius_map_new()
 	return g_object_new (MAPIUS_TYPE_MAP, NULL);
 }
 
+void
+mapius_map_change_map (MapiusMap *map, gchar *id)
+{
+	MapiusMapPrivate *priv = map->priv;
+
+	MapInfo *map_info = g_hash_table_lookup (priv->maps, id);
+	if (map_info) {
+		if (map_info->proj != priv->current_map->proj) {
+			guint size = pow (2, priv->zoom + 7);
+
+			double x = (priv->center_x - size) * EQUATOR_HALFLENGTH / size;
+			double y = (size - priv->center_y) * EQUATOR_HALFLENGTH / size;
+
+			pj_transform (priv->current_map->proj, map_info->proj, 1, 1, &x, &y, NULL);
+
+			priv->center_x = round (x * size / EQUATOR_HALFLENGTH + size);
+			priv->center_y = round (size - y * size / EQUATOR_HALFLENGTH);
+		}
+
+		priv->current_map = map_info;
+
+		soup_session_abort (priv->soup_session);
+		g_hash_table_remove_all (priv->loading);
+
+		priv->current_ts++;
+
+		g_signal_emit_by_name (GTK_WIDGET (map), "map-changed", map_info->title);
+
+		gtk_widget_queue_draw (GTK_WIDGET (map));
+	}
+}
+
 static void
 mapius_map_class_init (MapiusMapClass *klass)
 {
@@ -97,15 +129,21 @@ mapius_map_class_init (MapiusMapClass *klass)
 		g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 1, G_TYPE_STRING);
 }
 
-static void
-init_maps (MapiusMapPrivate *priv)
+static gint
+compare_maps (MapiusMapInfo *a, MapiusMapInfo *b)
 {
+	return g_strcmp0 (a->title, b->title);
+}
+
+static void
+mapius_map_init_maps (MapiusMap *map)
+{
+	MapiusMapPrivate *priv = map->priv;
 	PyObject *name, *module, *func, *value;
 	GError *err = NULL;
 	GDir *dir;
 	const gchar *fn;
 	gchar *map_id;
-	MapInfo *current_map = NULL;
 
 	Py_Initialize();
 	PySys_SetPath (priv->maps_dir);
@@ -117,7 +155,8 @@ init_maps (MapiusMapPrivate *priv)
 
 	g_debug ("Loading maps");
 
-	priv->maps = g_hash_table_new_full (g_int_hash, g_str_equal, g_free, NULL);
+	priv->maps = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	priv->current_map = NULL;
 
 	while ((fn = g_dir_read_name (dir))) {
 		if (!g_str_has_suffix (fn, ".py"))
@@ -159,11 +198,9 @@ init_maps (MapiusMapPrivate *priv)
 		gchar *key = g_strdup (PyString_AsString (value));
 		Py_DECREF (value);
 
-		gint *keyval = g_new (gint, 1);
-		*keyval = gdk_keyval_from_name (key);
-		if (*keyval == GDK_KEY_VoidSymbol || *keyval == 0) {
-			g_warning ("Unknown key '%s' for map '%s'", key, map_id);
-			continue;
+		guint keyval = gdk_keyval_from_name (key);
+		if (keyval == GDK_KEY_VoidSymbol) {
+			keyval = 0;
 		}
 
 		value = PyObject_GetAttrString (module, "format");
@@ -207,18 +244,32 @@ init_maps (MapiusMapPrivate *priv)
 		map_info->module = module;
 		map_info->url_func = func;
 
-		g_hash_table_insert (priv->maps, keyval, map_info);
+		g_hash_table_insert (priv->maps, map_id, map_info);
 
-		if (!current_map || g_strcmp0 (map_id, "osmmapMapnik") == 0) {
-			current_map = map_info;
+		if (!priv->current_map || g_strcmp0 (map_id, "osmmapMapnik") == 0) {
+			priv->current_map = map_info;
 		}
+
+		MapiusMapInfo *info = g_new (MapiusMapInfo, 1);
+		info->id = map_id;
+		info->title = title;
+		info->accel_key = keyval;
+		if (keyval) {
+			if (gdk_keyval_is_lower (keyval)) {
+				info->accel_mods = 0;
+			}
+			else {
+				info->accel_mods = GDK_SHIFT_MASK;
+			}
+		}
+		map->maps = g_list_append (map->maps, info);
 	}
 
 	if (g_hash_table_size (priv->maps) == 0) {
 		g_error ("Maps not found");
 	}
 
-	priv->current_map = current_map;
+	map->maps = g_list_sort (map->maps, (GCompareFunc) compare_maps);
 }
 
 static void
@@ -295,7 +346,7 @@ mapius_map_init (MapiusMap *map)
 	map->priv->cache_dir = cache_dir;
 	map->priv->maps_dir = maps_dir;
 
-	init_maps (map->priv);
+	mapius_map_init_maps (map);
 
 	gtk_widget_add_events (
 		GTK_WIDGET (map),
@@ -627,38 +678,6 @@ mapius_map_change_zoom (GtkWidget *widget, int dx, int dy, gboolean up)
 }
 
 static gboolean
-mapius_map_change_map (GtkWidget *widget, int keyval)
-{
-	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
-
-	MapInfo *map_info = g_hash_table_lookup (priv->maps, &keyval);
-	if (map_info) {
-		if (map_info->proj != priv->current_map->proj) {
-			guint size = pow (2, priv->zoom + 7);
-
-			double x = (priv->center_x - size) * EQUATOR_HALFLENGTH / size;
-			double y = (size - priv->center_y) * EQUATOR_HALFLENGTH / size;
-
-			pj_transform (priv->current_map->proj, map_info->proj, 1, 1, &x, &y, NULL);
-
-			priv->center_x = round (x * size / EQUATOR_HALFLENGTH + size);
-			priv->center_y = round (size - y * size / EQUATOR_HALFLENGTH);
-		}
-
-		priv->current_map = map_info;
-
-		soup_session_abort (priv->soup_session);
-		g_hash_table_remove_all (priv->loading);
-
-		priv->current_ts++;
-
-		g_signal_emit_by_name (widget, "map-changed", map_info->title);
-	}
-
-	return map_info ? TRUE : FALSE;
-}
-
-static gboolean
 mapius_map_key_press (GtkWidget *widget, GdkEventKey *event)
 {
 	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
@@ -681,7 +700,7 @@ mapius_map_key_press (GtkWidget *widget, GdkEventKey *event)
 	else if (event->keyval == GDK_KEY_Page_Down) {
 		mapius_map_change_zoom (widget, 0, 0, FALSE);
 	}
-	else if (!mapius_map_change_map (widget, event->keyval)) {
+	else {
 		return FALSE;
 	}
 

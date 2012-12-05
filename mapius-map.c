@@ -21,8 +21,8 @@ typedef struct
 
 struct _MapiusMapPrivate
 {
-	guint center_x;
-	guint center_y;
+	gint center_x;
+	gint center_y;
 	guint click_x;
 	guint click_y;
 	guint zoom;
@@ -33,7 +33,6 @@ struct _MapiusMapPrivate
 	guint current_ts;
 	projPJ spherical_mercator_proj;
 	projPJ ellipse_mercator_proj;
-	projPJ current_proj;
 	GHashTable *maps;
 	MapInfo *current_map;
 	gchar *cache_dir;
@@ -190,17 +189,15 @@ mapius_map_init_maps (MapiusMap *map)
 		gchar *title = g_strdup (PyString_AsString (value));
 		Py_DECREF (value);
 
+		guint keyval = 0;
 		value = PyObject_GetAttrString (module, "key");
-		if (!value) {
-			g_warning ("No key for map '%s'", map_id);
-			continue;
-		}
-		gchar *key = g_strdup (PyString_AsString (value));
-		Py_DECREF (value);
-
-		guint keyval = gdk_keyval_from_name (key);
-		if (keyval == GDK_KEY_VoidSymbol) {
-			keyval = 0;
+		if (value) {
+			gchar *key = g_strdup (PyString_AsString (value));
+			Py_DECREF (value);
+			keyval = gdk_keyval_from_name (key);
+			g_free (key);
+			if (keyval == GDK_KEY_VoidSymbol)
+				keyval = 0;
 		}
 
 		value = PyObject_GetAttrString (module, "format");
@@ -243,7 +240,6 @@ mapius_map_init_maps (MapiusMap *map)
 		map_info->proj = proj;
 		map_info->module = module;
 		map_info->url_func = func;
-
 		g_hash_table_insert (priv->maps, map_id, map_info);
 
 		if (!priv->current_map || g_strcmp0 (map_id, "osmmapMapnik") == 0) {
@@ -262,14 +258,14 @@ mapius_map_init_maps (MapiusMap *map)
 				info->accel_mods = GDK_SHIFT_MASK;
 			}
 		}
-		map->maps = g_list_append (map->maps, info);
+		map->maps = g_slist_prepend (map->maps, info);
 	}
 
 	if (g_hash_table_size (priv->maps) == 0) {
 		g_error ("Maps not found");
 	}
 
-	map->maps = g_list_sort (map->maps, (GCompareFunc) compare_maps);
+	map->maps = g_slist_sort (map->maps, (GCompareFunc) compare_maps);
 }
 
 static void
@@ -466,7 +462,7 @@ mapius_map_draw_scale (MapiusMap *map, cairo_t *cr)
 	MapiusMapPrivate *priv = map->priv;
 
 	gint size = pow (2, priv->zoom + 7);
-	double k = cosh (M_PI * (size - priv->center_y) / size);
+	double k = cosh (M_PI * abs(size - priv->center_y) / size);
 	double scale = EQUATOR_HALFLENGTH / size / k;
 	double distance = pow (10, floor( log10 (scale * 100)));
 	double width = distance / scale;
@@ -505,7 +501,7 @@ static gboolean
 mapius_map_draw (GtkWidget *widget, cairo_t *cr)
 {
 	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
-	guint center_x, center_y;
+	gint center_x, center_y;
 	gint offset_x, offset_y;
 	guint min_x, max_x, min_y, max_y;
 	guint max_size;
@@ -522,8 +518,8 @@ mapius_map_draw (GtkWidget *widget, cairo_t *cr)
 
 	min_x = priv->center_x > center_x ? (priv->center_x - center_x) / 256 : 0;
 	min_y = priv->center_y > center_y ? (priv->center_y - center_y) / 256 : 0;
-	max_x = (priv->center_x + center_x) / 256;
-	max_y = (priv->center_y + center_y) / 256;
+	max_x = priv->center_x + center_x > 0 ? (priv->center_x + center_x) / 256 : 0;
+	max_y = priv->center_y + center_y > 0 ? (priv->center_y + center_y) / 256 : 0;
 	max_size = pow (2, priv->zoom) - 1;
 	if (max_x > max_size)
 		max_x = max_size;

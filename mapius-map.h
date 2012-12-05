@@ -14,7 +14,7 @@ typedef struct _MapiusMapInfo MapiusMapInfo;
 struct _MapiusMap
 {
 	GtkDrawingArea parent_instance;
-	GList *maps;
+	GSList *maps;
 	MapiusMapPrivate *priv;
 };
 

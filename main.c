@@ -61,7 +61,7 @@ int main (int argc, char **argv, char **env)
 	gtk_grid_attach (GTK_GRID(container), map, 0, 1, 3, 1);
 
 	GtkWidget *maps_menu = gtk_menu_new ();
-	GList *i;
+	GSList *i;
 	MapiusMapInfo *info;
 	for (i = MAPIUS_MAP (map)->maps; i; i = i->next) {
 		info = (MapiusMapInfo *) i->data;

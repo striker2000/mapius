@@ -25,6 +25,8 @@ struct _MapiusMapPrivate
 	gint center_y;
 	guint click_x;
 	guint click_y;
+	guint start_x;
+	guint start_y;
 	guint zoom;
 	GHashTable *tiles;
 	GHashTable *loading;
@@ -37,6 +39,9 @@ struct _MapiusMapPrivate
 	MapInfo *current_map;
 	gchar *cache_dir;
 	gchar *maps_dir;
+	guint cursor_x;
+	guint cursor_y;
+	guint cursor_timeout_id;
 };
 
 typedef struct
@@ -341,6 +346,7 @@ mapius_map_init (MapiusMap *map)
 	map->priv->ellipse_mercator_proj = pj_init_plus (ELLIPSE_MERCATOR_PROJ);
 	map->priv->cache_dir = cache_dir;
 	map->priv->maps_dir = maps_dir;
+	map->priv->cursor_timeout_id = 0;
 
 	mapius_map_init_maps (map);
 
@@ -614,6 +620,16 @@ mapius_map_draw (GtkWidget *widget, cairo_t *cr)
 		draw_y += 256;
 	}
 
+	if (priv->cursor_timeout_id) {
+		gint k = pow (2, 24 - priv->zoom);
+		gint x = priv->cursor_x / k + offset_x;
+		gint y = priv->cursor_y / k + offset_y;
+		cairo_set_line_width (cr, 2);
+		cairo_set_source_rgb (cr, 1, 0, 0);
+		cairo_arc (cr, x, y, 5, 0, 2 * M_PI);
+		cairo_stroke (cr);
+	}
+
 	mapius_map_draw_scale (MAPIUS_MAP (widget), cr);
 
 	cairo_set_line_width (cr, 1);
@@ -710,12 +726,24 @@ mapius_map_button_press (GtkWidget *widget, GdkEventButton *event)
 {
 	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
-	priv->click_x = priv->center_x + event->x;
-	priv->click_y = priv->center_y + event->y;
+	priv->click_x = event->x;
+	priv->click_y = event->y;
+	priv->start_x = priv->center_x + event->x;
+	priv->start_y = priv->center_y + event->y;
 
 	priv->button_press = TRUE;
 
 	return TRUE;
+}
+
+static gboolean
+mapius_map_hide_cursor (MapiusMap *map)
+{
+	map->priv->cursor_timeout_id = 0;
+
+	gtk_widget_queue_draw (GTK_WIDGET (map));
+
+	return FALSE;
 }
 
 static gboolean
@@ -724,6 +752,17 @@ mapius_map_button_release (GtkWidget *widget, GdkEventButton *event)
 	MapiusMapPrivate *priv = MAPIUS_MAP (widget)->priv;
 
 	priv->button_press = FALSE;
+
+	if (abs(event->x - priv->click_x) < 5 && abs(event->y - priv->click_y) < 5) {
+		gint center_x = gtk_widget_get_allocated_width (widget) / 2;
+		gint center_y = gtk_widget_get_allocated_height (widget) / 2;
+		priv->cursor_x = (event->x - center_x + priv->center_x) * pow (2, 24 - priv->zoom);
+		priv->cursor_y = (event->y - center_y + priv->center_y) * pow (2, 24 - priv->zoom);
+
+		if (priv->cursor_timeout_id)
+			g_source_remove (priv->cursor_timeout_id);
+		priv->cursor_timeout_id = g_timeout_add_seconds (5, (GSourceFunc) mapius_map_hide_cursor, MAPIUS_MAP (widget));
+	}
 
 	gtk_widget_queue_draw (widget);
 
@@ -740,8 +779,8 @@ mapius_map_motion_notify (GtkWidget *widget, GdkEventMotion *event)
 		return FALSE;
 
 	gdk_window_get_device_position (event->window, event->device, &x, &y, NULL);
-	priv->center_x = priv->click_x - x;
-	priv->center_y = priv->click_y - y;
+	priv->center_x = priv->start_x - x;
+	priv->center_y = priv->start_y - y;
 
 	gtk_widget_queue_draw (widget);
 
